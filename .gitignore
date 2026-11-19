@@ -1,0 +1,36 @@
+HELP.md
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS 开发工具 ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA 开发工具 ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans 开发工具 ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code 开发工具 ###
+.vscode/
+
+### 本地配置（含数据库密码），不提交
+application-local.properties
