@@ -34,3 +34,9 @@ build/
 
 ### 本地配置（含数据库密码），不提交
 application-local.properties
+
+### 上传目录（运行时产生的图片），不提交 ###
+# 只提交 uploads/.gitkeep 占位，保证目录结构存在于仓库里
+# （否则新克隆的人 / CI 里执行上传会因为没有目录而失败）
+uploads/*
+!uploads/.gitkeep

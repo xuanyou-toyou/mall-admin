@@ -134,6 +134,30 @@ public class ProductDao {
         return rows > 0;
     }
 
+    public boolean update(Product product) {
+        String sql = "UPDATE product SET name = ?, sell = ?, stock = ?, image_url = ?, category_id = ?, status = ? WHERE id = ?";
+        int rows = jdbcTemplate.update(con -> {
+            PreparedStatement ps = con.prepareStatement(sql);
+            ps.setString(1, product.getName());
+            ps.setBigDecimal(2, product.getSell());
+            if (product.getStock() != null) {
+                ps.setInt(3, product.getStock());
+            } else {
+                ps.setInt(3, 0);
+            }
+            ps.setString(4, product.getImageUrl());
+            ps.setLong(5, product.getCategoryId());
+            if (product.getStatus() != null) {
+                ps.setInt(6, product.getStatus());
+            } else {
+                ps.setInt(6, 1);
+            }
+            ps.setLong(7, product.getId());
+            return ps;
+        });
+        return rows > 0;
+    }
+
     /**
      * 按主键查询单个商品。
      *
@@ -211,5 +235,12 @@ public class ProductDao {
         params.add(limit);
         params.add(offset);
         return jdbcTemplate.query(sql, PRODUCT_ROW_MAPPER, params.toArray());
+    }
+
+    /** 统计某分类下的商品数量 */
+    public int countByCategoryId(Long categoryId) {
+        String sql = "SELECT count(*) FROM product WHERE category_id = ?";
+        Integer count = jdbcTemplate.queryForObject(sql, Integer.class, categoryId);
+        return count == null ? 0 : count;
     }
 }

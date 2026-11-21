@@ -1,7 +1,11 @@
 package demo.mall.config;
 
+import demo.mall.service.FileService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
@@ -39,6 +43,8 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
+    private static final Logger log = LoggerFactory.getLogger(WebConfig.class);
+
     /**
      * 鉴权拦截器。
      *
@@ -51,8 +57,21 @@ public class WebConfig implements WebMvcConfigurer {
      */
     private final AuthInterceptor authInterceptor;
 
-    public WebConfig(AuthInterceptor authInterceptor) {
+    /**
+     * 文件服务。
+     *
+     * 为什么这里要注入 FileService，而不是再读一次 mall.upload.dir？
+     *   因为静态资源映射的目录必须和「文件实际落盘的目录」是同一个。
+     *   如果两边各自解析一次配置，将来有人改了配置名、或者给 FileService
+     *   加了自定义解析逻辑（比如支持 classpath:、支持 ~ 展开），
+     *   就会出现「上传成功、URL 拼好了、但一访问 404」的割裂状态。
+     *   直接从 FileService 拿已经算好的绝对路径，只有唯一事实来源。
+     */
+    private final FileService fileService;
+
+    public WebConfig(AuthInterceptor authInterceptor, FileService fileService) {
         this.authInterceptor = authInterceptor;
+        this.fileService = fileService;
     }
 
     /**
@@ -106,5 +125,71 @@ public class WebConfig implements WebMvcConfigurer {
                 .addPathPatterns("/api/**")
                 // 放行：登录注册、健康检查、测试接口
                 .excludePathPatterns("/api/auth/**", "/api/ping", "/api/hello/**");
+    }
+
+    /**
+     * 把 URL 路径映射到磁盘目录，让上传的图片能直接访问。
+     *
+     * ============================================================
+     * 映射规则
+     * ============================================================
+     *
+     *   GET /uploads/2026/11/21/xxx.jpg
+     *        ↓  去掉 /uploads 前缀，拼到 location 后面
+     *   文件 <mall.upload.dir>/2026/11/21/xxx.jpg
+     *
+     * addResourceHandler("/uploads/**")  对外暴露的 URL 模式
+     * addResourceLocations("file:/.../uploads/")  真实目录
+     *
+     * ============================================================
+     * 两个容易踩的坑
+     * ============================================================
+     *
+     * ① location 必须以 / 结尾。
+     *    写成 file:/E:/x/uploads（不带结尾斜杠）时，Spring 会把
+     *    "2026/11/21/xxx.jpg" 直接拼成 ".../uploads2026/11/21/xxx.jpg"，
+     *    结果就是全部 404，而且不报错，非常难查。
+     *
+     * ② 必须带 file: 前缀。
+     *    不带前缀时 Spring 会当成 classpath 相对路径（等价于 classpath:），
+     *    去 jar 里的 classes 下找，同样静默 404。
+     *
+     * 下面用 Path.toUri() 生成，它天然满足这两点（file:///E:/.../uploads/
+     * 已经带了 file: 和结尾斜杠），比自己手拼 "file:" + path 可靠 ——
+     * 手拼在 Windows 上还得处理反斜杠和盘符。
+     *
+     * ============================================================
+     * 为什么 /uploads/** 天然免鉴权（这条要确认清楚）
+     * ============================================================
+     *
+     * 鉴权只在 addInterceptors 里注册了 addPathPatterns("/api/**")，
+     * 拦截范围就是「以 /api/ 开头的路径」。/uploads/** 以 /uploads/ 开头，
+     * 不在 addPathPatterns 的匹配范围内，所以 AuthInterceptor 的 preHandle
+     * 根本不会被调用 —— 不需要额外写 excludePathPatterns，
+     * 写了反而是「在没拦的范围内再排除一次」，纯属噪音。
+     *
+     * 这是有意为之：商品图片要能直接给 <img src> 用，
+     * 浏览器发图片请求时不会带 Authorization 头（也没法带），
+     * 如果图片要鉴权，前端就得把每张图 fetch 成 blob 再转 URL，非常难用。
+     *
+     * ⚠️ 前提是上传目录里只放「公开可看」的内容。
+     *    如果以后要传「用户身份证、合同附件」这类私有文件，
+     *    绝不能放这个目录 —— 应该单独存一个私有目录，走需要鉴权的下载接口。
+     *
+     * ⚠️ 另一点：这里只做映射，不做「目录列表」。
+     *    /uploads/ 本身访问不到文件列表（Spring 的资源处理器只按具体文件找），
+     *    文件名是 32 位 UUID，别人猜不到别人的图。
+     *    但要清楚这是「不可枚举」而不是「有权限控制」——
+     *    拿到 URL 的人就能看，别把敏感东西放进来。
+     */
+    @Override
+    public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        String location = fileService.getRootDir().toUri().toString();
+        // 防御：toUri() 在目录不存在时不保证带结尾斜杠，补一下，避免坑 ①
+        if (!location.endsWith("/")) {
+            location = location + "/";
+        }
+        log.info("静态资源映射: /uploads/** -> {}", location);
+        registry.addResourceHandler("/uploads/**").addResourceLocations(location);
     }
 }

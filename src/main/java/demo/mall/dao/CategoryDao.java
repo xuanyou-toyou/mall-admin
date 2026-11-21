@@ -257,4 +257,43 @@ public class CategoryDao {
         // getFirst() 是 Java 21 的 SequencedCollection 方法，等价于 get(0)
         return list.isEmpty() ? null : list.getFirst();
     }
+
+    /** 查出所有分类（不分层）*/
+    public List<Category> findAll() {
+        return jdbcTemplate.query("SELECT id, parent_id, name, sort, status, created_at, updated_at FROM category", CATEGORY_ROW_MAPPER);
+    }
+
+    /** 更新分类 */
+    public boolean update(Category category) {
+        String sql = "UPDATE category SET parent_id = ?, name = ?, sort = ?, status = ? WHERE id = ?";
+        return jdbcTemplate.update(sql,
+                category.getParentId() == null ? 0L : category.getParentId(),
+                category.getName(),
+                category.getSort() == null ? 0 : category.getSort(),
+                category.getStatus() == null ? 1 : category.getStatus(),   // 默认 1（正常）
+                category.getId()) > 0;
+    }
+
+    /** 删除分类 */
+    public boolean deleteById(Long id) {
+        String sql = "DELETE FROM category WHERE id = ?";
+        return jdbcTemplate.update(sql, id) > 0;
+    }
+
+    /** 统计某分类下的子分类数量 */
+    public int countByParentId(Long parentId) {
+        String sql = "SELECT count(*) FROM category WHERE parent_id = ?";
+        Integer count = jdbcTemplate.queryForObject(sql, Integer.class, parentId);
+        return count == null ? 0 : count;
+    }
+
+    /** 根据分类名找 */
+    public Category findByName(String name) {
+        List<Category> list = jdbcTemplate.query(
+                "SELECT id, parent_id, name, sort, status, created_at, updated_at "
+                        + "FROM category WHERE name = ?",
+                CATEGORY_ROW_MAPPER, name);
+        return list.isEmpty() ? null : list.getFirst();
+    }
+
 }
