@@ -1,6 +1,7 @@
 package demo.mall.service;
 
 import demo.mall.common.BizException;
+import demo.mall.common.ResultCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -76,7 +77,21 @@ public class FileService {
      */
     private static final long MAX_FILE_SIZE = 5L * 1024 * 1024;
 
-    /** URL 前缀，必须和 WebConfig 里 addResourceHandlers 注册的路径保持一致。 */
+    /**
+     * URL 前缀 —— 全项目唯一的事实来源。
+     *
+     * 这个字符串同时决定两件事，两者必须完全一致：
+     *   ① 上传成功后返回的 URL 长什么样（这里拼）
+     *   ② WebConfig 里静态资源映射的模式是什么（调 getUrlPrefix() 拼）
+     *
+     * 为什么不放在 WebConfig（或两边各写一遍）：
+     *   以前 WebConfig 里硬编码 "/uploads/**"，这里硬编码 "/uploads"，
+     *   两处独立字面量。如果只改了其中一处，会出现最难查的故障形态：
+     *   接口返回 200 和一个看着完全正常的 URL，但 GET 它 404。
+     *   更糟的是单元测试测不出来 —— 测试用 getRootDir() 反推磁盘路径，
+     *   根本不过 HTTP 层，所以「URL 前缀」和「映射模式」对不上也能全绿。
+     *   现在 WebConfig 只能从这里取，物理上不可能不一致。
+     */
     private static final String URL_PREFIX = "/uploads";
 
     /** 按天分目录：yyyy/MM/dd。单目录文件过多会拖慢文件系统查找。 */
@@ -103,11 +118,24 @@ public class FileService {
     }
 
     /**
+     * URL 前缀，供 WebConfig 拼静态资源映射模式（{@code getUrlPrefix() + "/**"}）。
+     *
+     * 由 Service 提供、Config 消费，是为了让「返回的 URL」和「能访问的路径」
+     * 共用同一个常量。WebConfig 不再自己写 "/uploads" 字面量。
+     *
+     * @return 形如 /uploads，不带结尾斜杠
+     */
+    public String getUrlPrefix() {
+        return URL_PREFIX;
+    }
+
+    /**
      * 校验并保存上传的图片。
      *
      * @param file 前端 multipart/form-data 里的 file 部分
      * @return 可访问的相对 URL，例如 /uploads/2026/11/21/9f2c...e1.jpg
-     * @throws BizException 校验不通过或落盘失败，由 GlobalExceptionHandler 转成 HTTP 400
+     * @throws BizException 校验不通过（400）或落盘失败（500），
+     *                      由 GlobalExceptionHandler 按 code 映射成对应的 HTTP 状态码
      */
     public String upload(MultipartFile file) {
 
@@ -189,11 +217,28 @@ public class FileService {
             Files.createDirectories(targetDir);
             Files.copy(in, targetFile, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
-            // 磁盘满、没权限、目录被删…… 都归到这里。
-            // 把原始异常打进日志（排查要靠它），对外只给一句人话，
-            // 不把服务器路径、异常栈暴露给客户端。
+            // 磁盘满、没权限、目录被删、文件句柄耗尽…… 都归到这里。
+            //
+            // ============================================================
+            // 为什么这里必须是 500，不能是默认的 400
+            // ============================================================
+            // 这些全是「服务器侧故障」，不是客户端做错了什么。
+            // 如果报 400，会产生两个真实危害：
+            //   ① 前端会把它当成「参数不对」—— 提示用户改文件名、换图片、
+            //      改格式，用户怎么改都不可能成功，白白来回试；
+            //   ② 监控/告警通常按状态码分类，4xx 记为客户端错误不计入故障，
+            //      磁盘写满这种要命的故障就被静默吞掉了。
+            // 用 5xx 才能让「重试」「换机器」「叫运维」这些动作做对。
+            //
+            // 具体 code 取 ResultCode.INTERNAL_ERROR(500)，
+            // GlobalExceptionHandler.toHttpStatus 的 default 分支会把它映射成
+            // HTTP 500，响应体仍是统一的 {code,message,data}。
+            //
+            // 文案保持原样、不带任何内部信息：
+            //   targetFile 这类服务器绝对路径、异常类名、栈信息绝不能进响应体
+            //   （那等于把目录结构告诉攻击者）；这些只写进日志。
             log.error("保存上传文件失败: target={}", targetFile, e);
-            throw new BizException("文件保存失败，请稍后重试");
+            throw new BizException(ResultCode.INTERNAL_ERROR.getCode(), "文件保存失败，请稍后重试");
         }
 
         String url = URL_PREFIX + "/" + datePath + "/" + newFileName;

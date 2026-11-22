@@ -189,7 +189,15 @@ public class WebConfig implements WebMvcConfigurer {
         if (!location.endsWith("/")) {
             location = location + "/";
         }
-        log.info("静态资源映射: /uploads/** -> {}", location);
-        registry.addResourceHandler("/uploads/**").addResourceLocations(location);
+
+        // 模式前缀从 FileService 拿，不在这里重写 "/uploads" 字面量。
+        // 原因：这个前缀同时决定「上传返回的 URL」和「静态资源能访问的路径」，
+        //   两处各写一遍 = 改一处就出现「接口 200 返回一个看着正常的 URL，但 GET 404」，
+        //   而且用 getRootDir() 反推磁盘路径的老测试完全测不出来。
+        // 现在只有 FileService.URL_PREFIX 一个来源，物理上不可能不一致。
+        // 注意拼的是 "/uploads/**"，不是 "/uploads/*"：后者不匹配子目录里的文件。
+        String pattern = fileService.getUrlPrefix() + "/**";
+        log.info("静态资源映射: {} -> {}", pattern, location);
+        registry.addResourceHandler(pattern).addResourceLocations(location);
     }
 }
