@@ -10,6 +10,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -63,6 +64,51 @@ public class GlobalExceptionHandler {
             MissingServletRequestParameterException e) {
         log.warn("缺少请求参数：{}", e.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Result.fail(ResultCode.BAD_REQUEST));
+    }
+
+    /**
+     * 路径变量 / 请求参数类型转换失败，比如 Long 类型收到了 "upload"。
+     *
+     * ============================================================
+     * 这个异常是怎么来的（一条真实的踩坑路径）
+     * ============================================================
+     *
+     *   GET /api/products/upload      ← 用户手滑，或者前端把 POST 写成了 GET
+     *        ↓
+     *   没有精确匹配 "GET /api/products/upload" 的映射
+     *        ↓
+     *   但 @GetMapping("/{id}") 能匹配上，于是 "upload" 被当成 id
+     *        ↓
+     *   "upload" 转 Long 失败 → MethodArgumentTypeMismatchException
+     *
+     * ============================================================
+     * 为什么必须单独处理（不处理就是 500）
+     * ============================================================
+     * 不写这条 handler，它会落到最后的 @ExceptionHandler(Exception.class)，
+     * 返回 500「服务器内部错误」。
+     * 但请求方只是「参数传错了类型」——这是客户端错误，必须 400。
+     * 报 500 会把客户端错误算到服务端头上：监控告警里全是 5xx，
+     * 真正要处理的磁盘/DB 故障反而被淹没了。
+     *
+     * ============================================================
+     * 为什么文案要带上参数名和实际值
+     * ============================================================
+     * 只说「参数错误」，前端根本不知道该改哪个参数。
+     * 带上 "id" 和 "upload"，一眼就能看出「这个路径不是查详情的，
+     * 你是不是把 /upload 当成 id 了」。
+     *
+     * 注意：只回显「参数名 + 用户自己传的值」，不回显异常栈、类名、
+     * 期望的类型转换器 —— 那些属于内部实现细节，只写日志。
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<Result<Void>> handleMethodArgumentTypeMismatchException(
+            MethodArgumentTypeMismatchException e) {
+        // getName()  → 参数名，如 "id"
+        // getValue() → 用户实际传的原始值，如 "upload"（可能为 null）
+        String message = "参数 '" + e.getName() + "' 的值 '" + e.getValue() + "' 格式不正确";
+        log.warn("参数类型不匹配：{}（目标类型 {}）", message, e.getRequiredType());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(Result.fail(ResultCode.BAD_REQUEST.getCode(), message));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)

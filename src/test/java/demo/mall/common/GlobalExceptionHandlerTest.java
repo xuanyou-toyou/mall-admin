@@ -1,8 +1,10 @@
 package demo.mall.common;
 
+import demo.mall.util.JwtUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpStatus;
@@ -65,8 +67,11 @@ import static org.junit.jupiter.api.Assertions.*;
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "mall.upload.dir=target/test-uploads")
-@DisplayName("上传大小超限 → 400 而不是 500")
+@DisplayName("GlobalExceptionHandler：客户端错误一律 400（上传超限 / 参数类型错误）")
 class GlobalExceptionHandlerTest {
+
+    @Autowired
+    private JwtUtil jwtUtil;
 
     /**
      * RANDOM_PORT 下容器启动后会往 Environment 里写 local.server.port。
@@ -207,5 +212,54 @@ class GlobalExceptionHandlerTest {
         out.write(content);
         out.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
         return out.toByteArray();
+    }
+
+    // ================================================================
+    // ③ 路径变量类型不匹配 → 400
+    // ================================================================
+    /**
+     * 复现路径（为什么这条容易漏）：
+     *
+     *   GET /api/products/upload
+     *        ↓ 没有精确匹配 "GET /api/products/upload" 的映射
+     *        ↓ 但 @GetMapping("/{id}") 能匹配，于是 "upload" 被当成 id
+     *        ↓ "upload" → Long 转换失败，抛 MethodArgumentTypeMismatchException
+     *        ↓ 没有专门 handler 时落到 Exception 兜底 → 500
+     *
+     * 注意必须带 token：/api/** 被鉴权拦截器保护，
+     * 不带 token 会在参数解析之前就 401，测不到这里的 400。
+     *
+     * 媒体类型这里没有特殊要求：GET 无 body，只要带头就行。
+     */
+    @Test
+    @DisplayName("③ GET /api/products/upload（被 /{id} 吃掉）→ 400 而不是 500")
+    void pathVariableTypeMismatchReturns400() throws Exception {
+        System.out.println();
+        System.out.println("========== ③ 参数类型不匹配 ==========");
+
+        String token = jwtUtil.generateToken(1L, "e2e");
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + port + "/api/products/upload"))
+                .timeout(Duration.ofSeconds(20))
+                .header("Authorization", "Bearer " + token)
+                .GET()
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        System.out.println("  响应状态 : " + response.statusCode());
+        System.out.println("  响应体   : " + response.body());
+
+        // 修复前：MethodArgumentTypeMismatchException 落到 Exception 兜底 → 500
+        assertEquals(400, response.statusCode(),
+                "参数类型不匹配应 400，实际 " + response.statusCode() + "，响应体=" + response.body());
+        assertTrue(response.body().contains("\"code\":400"), "code 应为 400: " + response.body());
+        // 文案必须带参数名和实际值，否则前端不知道该改哪个参数
+        assertTrue(response.body().contains("参数 'id' 的值 'upload' 格式不正确"),
+                "message 应包含参数名和原始值，实际: " + response.body());
+
+        System.out.println("  ✅ 400 + 有指向性的 message");
     }
 }

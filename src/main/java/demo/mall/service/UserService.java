@@ -108,7 +108,22 @@ public class UserService {
         user.setPhone(req.getPhone());
         user.setPassword(passwordEncoder.encode(req.getPassword()));
         if (!userDao.insert(user)) {
-            throw new BizException("注册失败，请稍后重试");
+            // ============================================================
+            // 为什么这里是 500，不是默认的 400
+            // ============================================================
+            // 走到这一行说明：唯一性校验都过了，SQL 也执行了，但影响行数是 0。
+            // 这不是「用户填错了什么」（那种情况上面两步已经拦掉了），
+            // 而是服务器侧出了问题（表被锁、触发器拦截、连接异常被吞等）。
+            //
+            // 报 400 的两个真实危害（和 FileService 里 P0-1 同一个道理）：
+            //   ① 前端会让用户改用户名/手机号重试，怎么改都不可能成功；
+            //   ② 监控按状态码分类，4xx 不计入故障，注册全挂也不会告警。
+            //
+            // code 取 ResultCode.INTERNAL_ERROR(500)，GlobalExceptionHandler
+            // 的 toHttpStatus 会把它映射成 HTTP 500；文案保持原文案不变，
+            // 不把 SQL、表名、约束名这类内部信息泄漏给客户端（那些只进日志）。
+            log.error("用户注册写库失败（影响行数为 0）：username={}", user.getUsername());
+            throw new BizException(ResultCode.INTERNAL_ERROR.getCode(), "注册失败，请稍后重试");
         }
         log.info("用户注册成功：username={}, id={}", user.getUsername(), user.getId());
 

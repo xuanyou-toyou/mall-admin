@@ -1,6 +1,7 @@
 package demo.mall.service;
 
 import demo.mall.common.BizException;
+import demo.mall.common.ResultCode;
 import demo.mall.dao.CategoryDao;
 import demo.mall.dao.ProductDao;
 import demo.mall.dto.CategoryTreeNode;
@@ -57,7 +58,24 @@ public class CategoryService {
         if (category.getStatus() > 1 || category.getStatus() < 0) {
             throw new BizException("状态应该为0或1");
         }
-        categoryDao.insert(category);
+        // ============================================================
+        // 检查 insert 的返回值（以前是直接丢掉，等于假装成功）
+        // ============================================================
+        // 返回 false 表示 SQL 执行了但影响行数为 0，属于服务器侧故障。
+        //
+        // 忽略返回值比报错更难查：
+        //   接口返回 200「成功」，前端提示创建成功、跳到列表页 —— 列表里却没有这条。
+        //   用户以为是自己没点到，反复重试，几次之后攒出一堆问号。
+        //   所以必须：① 抛 500 让客户端知道失败了；② 日志里留下是哪条数据没写进去。
+        //
+        // ⚠️ 注意：insert 失败时 category 的 id 仍然是 null
+        //    （DAO 只在成功时才把自增主键回填到对象上）。
+        //    所以这里的日志只能打 name，不能打 getId() —— 那样只会打出 "id=null"，
+        //    对排查没有任何帮助，还容易让人误以为 id 是 0。
+        if (!categoryDao.insert(category)) {
+            log.error("分类创建失败（影响行数为 0）：name={}", category.getName());
+            throw new BizException(ResultCode.INTERNAL_ERROR.getCode(), "分类创建失败，请稍后重试");
+        }
         log.info("分类添加成功, id={} name={}", category.getId(), category.getName());
     }
 //    - tree()             上面的算法
